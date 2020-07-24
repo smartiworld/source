@@ -1,0 +1,342 @@
+Reentrantlock.newCondition
+public Condition newCondition() {
+	return sync.newCondition();
+}
+Condition.await
+public final void await() throws InterruptedException {
+	if (Thread.interrupted())
+		throw new InterruptedException();
+	添加当前线程等待节点
+	Node node = addConditionWaiter();
+	尝试释放锁，返回当前净加锁次数
+	int savedState = fullyRelease(node);
+	int interruptMode = 0;
+	while (!isOnSyncQueue(node)) {
+	如果当前等待节点不在sync队列，则挂起当前线程
+		LockSupport.park(this);
+		其他线程唤醒后
+		获取当前节点的中断状态
+		if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+			如果不是0，则跳出当前循环
+			break;
+	}
+	如果当前节点为head后继节点，则尝试获取一次锁，如果获取到锁则返回false，如果没有获取到锁或者当前节点非头节点的后置节点则挂起当前线程，
+	当前挂起线程被唤醒后，获取到锁，返回true，
+	if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+	如果当前状态不是-1，则将当前状态设置为1 REINTERRUPT
+		interruptMode = REINTERRUPT;
+	如果当前节点的后继condition队列节点不为空，则进行一次清除condition队列中非condition状态的节点
+	if (node.nextWaiter != null) // clean up if cancelled
+		unlinkCancelledWaiters();
+	if (interruptMode != 0)
+	如果当前中断标志不为0
+		中断在signal前，则抛出异常
+		中断在signal之后，则设置中断标志
+		reportInterruptAfterWait(interruptMode);
+}
+	添加当前线程等待节点，队列不为空的情况下移除等待队列非condition状态节点
+	private Node addConditionWaiter() {
+		Node t = lastWaiter;
+		// If lastWaiter is cancelled, clean out.
+		if (t != null && t.waitStatus != Node.CONDITION) {
+		如果当前condition队列不为空并且last节点状态不为等待状态
+			从头遍历等待队列，移除队列中状态不为condition状态的节点
+			unlinkCancelledWaiters();
+			队列中如果尾节点非condition状态将会被移除，尾节点会重新设置。
+			t = lastWaiter;
+		}
+		当前线程创建一个condition状态节点
+		Node node = new Node(Thread.currentThread(), Node.CONDITION);
+		if (t == null)
+			如果当前队列为空，当前节点设置为第一个节点
+			firstWaiter = node;
+		else
+			如果当前节点不为空，将当前节点设置为last的后继节点
+			t.nextWaiter = node;
+		然后将当前节点设置为last节点
+		lastWaiter = node;
+		return node;
+	}
+		1.遍历队列当前节点是否condition状态
+		2.遍历队列中存在condition状态节点
+		3.遍历队列当前节点的后继节点为空
+		移除当前队列非condition状态的节点
+		private void unlinkCancelledWaiters() {
+			Node t = firstWaiter;
+			Node trail = null;
+			while (t != null) {
+				获取当前队列头节点的后·继等待节点
+				Node next = t.nextWaiter;
+				当前队列head节点不是condition状态-2
+				if (t.waitStatus != Node.CONDITION) {
+					将头节点后继指向空
+					t.nextWaiter = null;
+					if (trail == null)
+						如果trail为空目前队列中所有的都是非condition状态的节点，
+						将当前head的后继设置为head节点，前head节点出队
+						firstWaiter = next;
+					else
+						trail表示是condition状态的节点，如果当前不为空，trail后继节点指向当前节点的后继节点，当前节点移除当前队列
+						trail.nextWaiter = next;
+					if (next == null)
+						lastWaiter = trail;
+				}
+				else
+					如果当前节点状态是condition状态（-2）将t赋值trail，trail表示当前遍历的队列中是否存在是condition状态的节点，trail跟随遍历队列中condition节点移动
+					永远指向遍历最新的trail节点
+					trail = t;
+				后继节点赋值给当前节点
+				t = next;
+			}
+		}
+	尝试释放锁
+	final int fullyRelease(Node node) {
+		boolean failed = true;
+		try {
+			int savedState = getState();
+			if (release(savedState)) {
+				当前节点释放掉锁
+				failed = false;
+				返回当前锁状态值
+				return savedState;
+			} else {
+				throw new IllegalMonitorStateException();
+			}
+		} finally {
+			if (failed)
+			如果释放失败，设置当前节点的状态为cancel 1状态
+				node.waitStatus = Node.CANCELLED;
+		}
+	}
+		public final boolean release(int arg) {
+			if (tryRelease(arg)) {
+				如果当前对象释放锁成功，获取头节点
+				Node h = head;
+				if (h != null && h.waitStatus != 0)
+				当前头节点不为空并且状态不为0，唤醒头节点后状态小于等于0的节点
+					unparkSuccessor(h);
+				return true;
+			}
+			return false;
+		}
+			获取当前state数值，将当前值减去releases释放的值
+			protected final boolean tryRelease(int releases) {
+				int c = getState() - releases;
+				if (Thread.currentThread() != getExclusiveOwnerThread())
+				如果当前线程和持有锁的线程不是同一个线程，则抛出异常
+					throw new IllegalMonitorStateException();
+				boolean free = false;
+				if (c == 0) {
+					结果为0表示当前线程释放当前持有的锁，然后将持有线程对象设置为空
+					free = true;
+					setExclusiveOwnerThread(null);
+				}
+				设置当前锁的状态
+				setState(c);
+				return free;
+			}
+
+	final boolean isOnSyncQueue(Node node) {
+		如果当前 节点状态是condition状态或者当前节点的前继节点为空，当前队列是condition队列
+		if (node.waitStatus == Node.CONDITION || node.prev == null)
+			return false;
+		if (node.next != null) // If has successor, it must be on queue
+		如果当前节点的后继节点为空 返回true，当前队列加锁队列
+			return true;
+		/*
+		 * node.prev can be non-null, but not yet on queue because
+		 * the CAS to place it on queue can fail. So we have to
+		 * traverse from tail to make sure it actually made it.  It
+		 * will always be near the tail in calls to this method, and
+		 * unless the CAS failed (which is unlikely), it will be
+		 * there, so we hardly ever traverse much.
+		 */
+		return findNodeFromTail(node);
+	}
+	如果当前节点存在sync加锁队列中，则返回true
+	private boolean findNodeFromTail(Node node) {
+        Node t = tail;
+        for (;;) {
+            if (t == node)
+                return true;
+            if (t == null)
+                return false;
+            t = t.prev;
+        }
+    }
+	
+	private int checkInterruptWhileWaiting(Node node) {
+		如果当前线程是非中断状态返回0
+		return Thread.interrupted() ?
+			如果当前线程是中断状态，并且设置当前节点状态0成功，返回THROW_IE -1，
+			如果当前线程是中断状态，并且设置当前节点状态0失败，返回REINTERRUPT 1
+			(transferAfterCancelledWait(node) ? THROW_IE : REINTERRUPT) :
+			0;
+	}
+	当前等待节点被唤醒后，使用cas操作将当前节点状态设置为0。
+	在线程中断的时候，是否这时有signal方法的调用。如果cas设置成功表示当前方法在signal方法前调用
+	final boolean transferAfterCancelledWait(Node node) {
+		cas设置节点状态为初始状态，此时不在condition
+        if (compareAndSetWaitStatus(node, Node.CONDITION, 0)) {
+			当前节点状态设置0成功，则将当前节点加入获取锁的等待队列，设置成功中断在signal之前
+            enq(node);
+            return true;
+        }
+        /*
+         * If we lost out to a signal(), then we can't proceed
+         * until it finishes its enq().  Cancelling during an
+         * incomplete transfer is both rare and transient, so just
+         * spin.
+         */
+		如果设置失败，判断当前节点是否在sync获取锁等待队列中
+        while (!isOnSyncQueue(node))
+			没有在等待队列中，让当前线程让出cpu，转到就绪状态，有可能再次进入运行状态
+			直到当前的node已经被signal方法添加到Sync队列中
+            Thread.yield();
+        return false;
+    }
+	根据当前中断状态是抛出中断异常还是设置中断标志
+	private void reportInterruptAfterWait(int interruptMode)
+		throws InterruptedException {
+		当前中断标志是THROW_IE -1 则抛出中断异常
+		if (interruptMode == THROW_IE)
+			throw new InterruptedException();
+		else if (interruptMode == REINTERRUPT)
+		当前中断标志是REINTERRUPT 1 则设置当前线程中断状态
+			selfInterrupt();
+	}
+	
+Condition.await(时间)
+	public final long awaitNanos(long nanosTimeout)
+                throws InterruptedException {
+		if (Thread.interrupted())
+			throw new InterruptedException();
+		Node node = addConditionWaiter();
+		int savedState = fullyRelease(node);
+		final long deadline = System.nanoTime() + nanosTimeout;
+		int interruptMode = 0;
+		while (!isOnSyncQueue(node)) {
+			如果当前剩余等待时间小于0跳出当前循环
+			if (nanosTimeout <= 0L) {
+				如果在这个方法前没有signal，则设置节点状态为初始状态，将当前节点加入到sync队列等待获取锁。
+				如果这个方法在signal之后调用，则判断当前节点是否在sync获取锁等待队列中
+				没有在等待队列中，让当前线程让出cpu，转到就绪状态，有可能再次进入运行状态
+				直到当前的node已经被signal方法添加到Sync队列中
+				transferAfterCancelledWait(node);
+				break;
+			}
+			如果剩余时间大于1秒，则挂起当前线程，将当前剩余时间设置最大挂起超时时间
+			if (nanosTimeout >= spinForTimeoutThreshold)
+				LockSupport.parkNanos(this, nanosTimeout);
+			if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+				break;
+			nanosTimeout = deadline - System.nanoTime();
+		}
+		if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+			interruptMode = REINTERRUPT;
+		if (node.nextWaiter != null)
+			unlinkCancelledWaiters();
+		if (interruptMode != 0)
+			reportInterruptAfterWait(interruptMode);
+		return deadline - System.nanoTime();
+	}
+	等待直到某一个时间
+	public final boolean awaitUntil(Date deadline)
+					throws InterruptedException {
+		long abstime = deadline.getTime();
+		if (Thread.interrupted())
+			throw new InterruptedException();
+		Node node = addConditionWaiter();
+		int savedState = fullyRelease(node);
+		boolean timedout = false;
+		int interruptMode = 0;
+		while (!isOnSyncQueue(node)) {
+			当前时间大于设定时间的时候，退出当前循环，使用cas操作将当前节点状态修改为初始状态
+			if (System.currentTimeMillis() > abstime) {
+				timedout = transferAfterCancelledWait(node);
+				break;
+			}
+			挂起线程到设定时间
+			LockSupport.parkUntil(this, abstime);
+			if ((interruptMode = checkInterruptWhileWaiting(node)) != 0)
+				break;
+		}
+		if (acquireQueued(node, savedState) && interruptMode != THROW_IE)
+			interruptMode = REINTERRUPT;
+		if (node.nextWaiter != null)
+			unlinkCancelledWaiters();
+		if (interruptMode != 0)
+			reportInterruptAfterWait(interruptMode);
+		return !timedout;
+	}
+condition.signal
+public final void signal() {
+	if (!isHeldExclusively())
+		throw new IllegalMonitorStateException();
+	Node first = firstWaiter;
+	if (first != null)
+		doSignal(first);
+}
+private void doSignal(Node first) {
+	do {
+	当前头节点的后置节点不为空
+		if ( (firstWaiter = first.nextWaiter) == null)
+		如果condition队列头节点的后继节点为空，则将尾节点设置为空
+			lastWaiter = null;
+		将头节点的后置
+		first.nextWaiter = null;
+		如果当前设置当前节点为初始状态失败并且当前节点的后置节点不为空
+		继续执行当前循环，直到有可以设置为初始状态的节点，或者到达链表底部
+	} while (!transferForSignal(first) &&
+			 (first = firstWaiter) != null);
+}
+final boolean transferForSignal(Node node) {
+	/*
+	 * If cannot change waitStatus, the node has been cancelled.
+	 */
+	将当前节点状态cas设置为初始状态，如果线程在condition中被中断后调用，此次cas设置失败
+	if (!compareAndSetWaitStatus(node, Node.CONDITION, 0))
+		return false;
+
+	/*
+	 * Splice onto queue and try to set waitStatus of predecessor to
+	 * indicate that thread is (probably) waiting. If cancelled or
+	 * attempt to set waitStatus fails, wake up to resync (in which
+	 * case the waitStatus can be transiently and harmlessly wrong).
+	 */
+	上一步设置节点初始状态成功
+	将当前节点加入到sync队列等待被唤醒获取锁
+	返回当前节点的前置节点p 此时p的状态是0
+	Node p = enq(node);
+	int ws = p.waitStatus;
+	如果p节点的状态是大于0或者设置p节点状态到signal状态失败（如果此时有等待获取锁的节点加入到队列，
+	或者出现异常当前节点的进入到cancelAcquire中，将当前节点状态设置为cancel状态），
+	则唤醒node节点线程
+	if (ws > 0 || !compareAndSetWaitStatus(p, ws, Node.SIGNAL))
+		LockSupport.unpark(node.thread);
+	return true;
+}
+public final void signalAll() {
+	if (!isHeldExclusively())
+		throw new IllegalMonitorStateException();
+	Node first = firstWaiter;
+	if (first != null)
+		doSignalAll(first);
+}
+将当前condition队列中所有节点condition状态设置为初始状态
+private void doSignalAll(Node first) {
+	将当前condition队列头节点和尾节点置为空
+	lastWaiter = firstWaiter = null;
+	do {
+		获取当前节点的后置节点
+		Node next = first.nextWaiter;
+		将当前节点的后置节点设置为空
+		first.nextWaiter = null;
+		设置当前节点状态为初始状态，即将condition-2转换成0，设置失败则返回false
+		设置成功后将当前节点插入到等待获取锁的队列尾部，如果当前节点前置节点设置signal状态失败则唤醒当前线程
+		其他正常返回 true
+		transferForSignal(first);
+		将后继节点设置为当前节点，继续循环，直到遍历到队列尾部
+		first = next;
+	} while (first != null);
+}		
