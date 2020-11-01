@@ -1,0 +1,143 @@
+将当前链表转换成红黑树节点
+final void treeifyBin(Node<K,V>[] tab, int hash) {
+	int n, index; Node<K,V> e;
+	if (tab == null || (n = tab.length) < MIN_TREEIFY_CAPACITY)
+		resize();
+	else if ((e = tab[index = (n - 1) & hash]) != null) {
+		TreeNode<K,V> hd = null, tl = null;
+		//遍历当前链表
+		do {
+			//将当前数组下的链表中的每个节点转换成红黑树节点
+			TreeNode<K,V> p = replacementTreeNode(e, null);
+			if (tl == null)
+				//hd头节点
+				hd = p;
+			else {
+				//将上个节点作为当前节点前节点
+				p.prev = tl;
+				//上个节点下节点指向当前节点
+				tl.next = p;
+			}
+			//将当前节点赋值t1，当做下次遍历的前节点
+			tl = p;
+		} while ((e = e.next) != null);
+		if ((tab[index] = hd) != null)
+			//将链表转换成
+			hd.treeify(tab);
+	}
+}
+//将链表转换成二叉树
+final void treeify(Node<K,V>[] tab) {
+	TreeNode<K,V> root = null;
+	//this链表头位置
+	for (TreeNode<K,V> x = this, next; x != null; x = next) {
+		//下一个节点
+		next = (TreeNode<K,V>)x.next;
+		x.left = x.right = null;
+		if (root == null) {
+			x.parent = null;
+			//当前节点原色 黑色
+			x.red = false;
+			root = x;
+		}
+		else {//非链表第一个节点
+			K k = x.key;
+			int h = x.hash;
+			Class<?> kc = null;
+			for (TreeNode<K,V> p = root;;) {
+				int dir, ph;
+				K pk = p.key;
+				if ((ph = p.hash) > h)
+					dir = -1;
+				else if (ph < h)
+					dir = 1;
+				else if ((kc == null &&
+							//当前节点是否实现Comparable
+						  (kc = comparableClassFor(k)) == null) ||
+						 (dir = compareComparables(kc, k, pk)) == 0)
+					dir = tieBreakOrder(k, pk);
+
+				TreeNode<K,V> xp = p;
+				//遍历树当前节点小于当前父节点，则检查左子树，如果为空则放到当前节点的左子树上，如果当前左子树不为空则从左子树按照此逻辑遍历
+				//如果当前节点大于当前父节点，检查右字树
+				if ((p = (dir <= 0) ? p.left : p.right) == null) {
+					x.parent = xp;
+					//当前节点和父节点比较，小于父节点排在父节点左子树，反之排在右字树
+					if (dir <= 0)
+						xp.left = x;
+					else
+						xp.right = x;
+					//平衡红黑树
+					root = balanceInsertion(root, x);
+					break;
+				}
+			}
+		}
+	}
+	moveRootToFront(tab, root);
+}
+
+//root根节点 x当前节点
+static <K,V> TreeNode<K,V> balanceInsertion(TreeNode<K,V> root,
+                                                    TreeNode<K,V> x) {
+	x.red = true;
+	for (TreeNode<K,V> xp, xpp, xppl, xppr;;) {
+		//当前节点父节点为空，当前节点则为根节点，黑色节点
+		if ((xp = x.parent) == null) {
+			x.red = false;
+			return x;
+		}
+		//当前节点父节点黑色节点或者当前节点父节点的父节点为空
+		else if (!xp.red || (xpp = xp.parent) == null)
+			//返回根节点
+			return root;
+		//当前节点祖先节点存在，当前节点的父节点为祖先节点的左子树
+		if (xp == (xppl = xpp.left)) {
+			//当前节点父节点的右兄弟节点存在并且是红色节点
+			if ((xppr = xpp.right) != null && xppr.red) {
+				//当前节点的父节点右兄弟节点为黑色几点
+				xppr.red = false;
+				//当前节点的父节点黑色节点
+				xp.red = false;
+				//当前节点的祖先节点为红色节点
+				xpp.red = true;
+				//将祖先节点置为当前节点
+				x = xpp;
+			}
+			else {
+				if (x == xp.right) {
+					root = rotateLeft(root, x = xp);
+					xpp = (xp = x.parent) == null ? null : xp.parent;
+				}
+				if (xp != null) {
+					xp.red = false;
+					if (xpp != null) {
+						xpp.red = true;
+						root = rotateRight(root, xpp);
+					}
+				}
+			}
+		}
+		else {
+			if (xppl != null && xppl.red) {
+				xppl.red = false;
+				xp.red = false;
+				xpp.red = true;
+				x = xpp;
+			}
+			else {
+				if (x == xp.left) {
+					root = rotateRight(root, x = xp);
+					xpp = (xp = x.parent) == null ? null : xp.parent;
+				}
+				if (xp != null) {
+					xp.red = false;
+					if (xpp != null) {
+						xpp.red = true;
+						root = rotateLeft(root, xpp);
+					}
+				}
+			}
+		}
+	}
+}
